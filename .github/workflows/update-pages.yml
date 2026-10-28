@@ -1,0 +1,204 @@
+name: Update report from upstream
+
+on:
+  schedule:
+    - cron: "0 0 * * 1"
+  workflow_dispatch:
+  pull_request_target:
+    branches:
+      - pages
+    types:
+      - closed
+
+permissions:
+  contents: write
+  pull-requests: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: false
+
+jobs:
+  prepare-test:
+    if: github.event_name != 'pull_request_target'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/test/
+    outputs:
+      changed: ${{ steps.compare.outputs.changed }}
+      sha: ${{ steps.upstream.outputs.sha }}
+      has_site: ${{ steps.site.outputs.exists }}
+    steps:
+      - name: Check out published pages branch
+        uses: actions/checkout@v4
+        with:
+          ref: pages
+
+      - name: Check out workflow source
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: source
+
+      - name: Check for existing published site
+        id: site
+        run: |
+          if [ -f index.html ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Read upstream default branch and commit
+        id: upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          repo=$(gh api repos/ZOOT-Plus/zoot-plus-store)
+          branch=$(jq -r .default_branch <<< "$repo")
+          sha=$(gh api "repos/ZOOT-Plus/zoot-plus-store/commits/$branch" --jq .sha)
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Compare with last approved upstream revision
+        id: compare
+        env:
+          CURRENT_SHA: ${{ steps.upstream.outputs.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          previous=$(cat state/upstream-sha.txt 2>/dev/null || true)
+          echo "previous=$previous" >> "$GITHUB_OUTPUT"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] || [ "$CURRENT_SHA" != "$previous" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download upstream data
+        if: steps.compare.outputs.changed == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: ZOOT-Plus/zoot-plus-store
+          ref: ${{ steps.upstream.outputs.sha }}
+          path: upstream
+
+      - name: Download last approved data for initial Pages setup
+        if: steps.compare.outputs.changed == 'true' && steps.compare.outputs.previous != '' && !hashFiles('index.html')
+        uses: actions/checkout@v4
+        with:
+          repository: ZOOT-Plus/zoot-plus-store
+          ref: ${{ steps.compare.outputs.previous }}
+          path: upstream-current
+
+      - name: Set up Python
+        if: steps.compare.outputs.changed == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Generate candidate site
+        if: steps.compare.outputs.changed == 'true'
+        run: |
+          python source/generate_operator_report.py --jobs-dir upstream --output-dir candidate
+          cp source/favicon.png candidate/favicon.png
+          mkdir -p state
+          printf '%s\n' '${{ steps.upstream.outputs.sha }}' > state/upstream-sha.txt
+
+      - name: Prepare combined site preview
+        if: steps.compare.outputs.changed == 'true'
+        run: |
+          mkdir -p public/test
+          if [ -f index.html ]; then
+            cp index.html public/index.html
+            cp favicon.png public/favicon.png
+          elif [ -d upstream-current ]; then
+            python source/generate_operator_report.py --jobs-dir upstream-current --output-dir public
+            cp source/favicon.png public/favicon.png
+          fi
+          cp source/.nojekyll public/.nojekyll
+          cp candidate/index.html public/test/index.html
+          cp candidate/favicon.png public/test/favicon.png
+
+      - name: Keep only deployable site files on pages branch
+        if: steps.compare.outputs.changed == 'true'
+        run: |
+          while IFS= read -r -d '' file; do
+            case "$file" in
+              index.html|favicon.png|.nojekyll|test/*|state/upstream-sha.txt) ;;
+              *) git rm -f -- "$file" ;;
+            esac
+          done < <(git ls-files -z)
+          cp candidate/index.html index.html
+          cp candidate/favicon.png favicon.png
+          cp source/.nojekyll .nojekyll
+          mkdir -p test
+          cp candidate/index.html test/index.html
+          cp candidate/favicon.png test/favicon.png
+
+      - name: Upload preview Pages artifact
+        if: steps.compare.outputs.changed == 'true' && steps.site.outputs.exists == 'true'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+      - name: Deploy test preview
+        if: steps.compare.outputs.changed == 'true' && steps.site.outputs.exists == 'true'
+        uses: actions/deploy-pages@v4
+
+      - name: Create or update approval PR
+        if: steps.compare.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v8
+        with:
+          token: ${{ github.token }}
+          base: pages
+          branch: pages-test
+          delete-branch: false
+          add-paths: |
+            .
+            :(exclude)source/**
+            :(exclude)upstream/**
+            :(exclude)upstream-current/**
+            :(exclude)candidate/**
+            :(exclude)public/**
+          commit-message: "chore: update report to ${{ steps.upstream.outputs.sha }}"
+          title: "Update published report to ${{ steps.upstream.outputs.sha }}"
+          body: |
+            Automated report update from `ZOOT-Plus/zoot-plus-store`.
+
+            Preview: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/test/
+
+            Merge this pull request to publish the candidate at the production URL.
+
+            This run skips the preview deployment if no approved site exists yet.
+
+  publish-production:
+    if: github.event_name == 'pull_request_target' && github.event.pull_request.merged == true && github.event.pull_request.head.ref == 'pages-test'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Check out approved pages branch
+        uses: actions/checkout@v4
+        with:
+          ref: pages
+
+      - name: Assemble production Pages artifact
+        run: |
+          mkdir -p public
+          cp index.html public/index.html
+          cp favicon.png public/favicon.png
+          if [ -f .nojekyll ]; then cp .nojekyll public/.nojekyll; else touch public/.nojekyll; fi
+          if [ -d test ]; then cp -R test public/test; fi
+
+      - name: Upload production Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+      - name: Deploy approved production site
+        id: deployment
+        uses: actions/deploy-pages@v4
