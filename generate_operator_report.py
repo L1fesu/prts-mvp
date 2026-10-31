@@ -122,6 +122,9 @@ def write_html_report(
   .range-preset:hover, .range-preset.is-active {{ background: #e9f4fb; border-color: #2385c5; color: #176ea8; }}
   .explanation {{ color: #8a95a2; font-size: 12px; line-height: 1.7; margin-top: 8px; }}
   .explanation p {{ margin: 2px 0; }}
+  .filter-help {{ margin-top: 4px; }}
+  .filter-help summary {{ width: fit-content; color: #647382; font-weight: 600; cursor: pointer; user-select: none; }}
+  .filter-help[open] summary {{ margin-bottom: 3px; }}
   .types {{ display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }}
   .filter-list {{ display: grid; gap: 14px; margin-top: 18px; }}
   .filter-row {{ display: grid; grid-template-columns: 70px minmax(0, 1fr); gap: 12px; align-items: start; }}
@@ -189,10 +192,13 @@ def write_html_report(
     </div>
     <div id="summary"></div>
     <div class="explanation">
-      <p>* 数值越大，通常意味着作业越新。</p>
-      <p>* 只看单核：将3星干员视为辅助位，作业中仅有一名3星及以上干员。</p>
-      <p>* 最佳组合仅统计3星及以上干员。</p>
-      <p>* 「已拥有/未拥有」需先上传 MAA 导出的干员数据，文件只在浏览器本地解析，不会上传到任何服务器。</p>
+      <details class="filter-help">
+        <summary>筛选说明</summary>
+        <p>* 作业范围数值越大，通常意味着作业越新。</p>
+        <p>* 只看单核：将3星干员视为辅助位，作业中仅有一名3星及以上干员。</p>
+        <p>* 最佳组合仅统计3星及以上干员。</p>
+        <p>* 「已拥有/未拥有」需先上传 MAA 导出的干员数据，文件只在浏览器本地解析，不会上传到任何服务器。</p>
+      </details>
     </div>
   </section>
   <section class="panel"><div class="chart-head"><span></span><span id="rankingNote" class="chart-note"></span></div><div class="table-head"><span class="operator-label">干员</span><span></span><span id="countLabel" class="count-label">出现次数</span></div><div id="chart"></div><div class="load-more-wrap"><button id="loadAll" class="load-more" type="button"></button></div></section>
