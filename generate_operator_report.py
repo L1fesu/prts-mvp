@@ -135,6 +135,12 @@ def write_html_report(
   .types label {{ display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 11px; background: #f7f9fb; border: 1px solid #d8dee6; color: #5b6775; cursor: pointer; transition: .15s ease; }}
   .types label:has(input:checked) {{ border-color: #2385c5; background: #e9f4fb; color: #176ea8; box-shadow: inset 0 -2px #2385c5; }}
   .types input {{ accent-color: #2385c5; }}
+  .types label:has(input:disabled) {{ background: #f2f4f7; border-color: #e3e7ec; color: #a8b2bd; cursor: not-allowed; box-shadow: none; }}
+  .types label:has(input:disabled) input {{ accent-color: #a8b2bd; }}
+  .plain-button {{ padding: 8px 14px; background: #fff; border-color: #cbd3dc; color: #566372; }}
+  .plain-button:hover {{ background: #e9f4fb; border-color: #2385c5; color: #176ea8; }}
+  .owner-status {{ color: #8a95a2; font-size: 12px; }}
+  .owner-status.is-error {{ color: #c0392b; }}
   #summary {{ color: #7a8694; font-size: 13px; margin-top: 18px; padding-top: 14px; border-top: 1px solid #e6e9ed; }}
   .chart-head {{ display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 16px; }}
   .chart-note {{ color: #8a95a2; font-size: 12px; }}
@@ -177,12 +183,14 @@ def write_html_report(
       <div class="filter-row"><span class="section-label">场景</span><div class="filter-options"><div class="filter-actions"><button type="button" data-filter-target="types" data-filter-value="true">全选</button><button type="button" data-filter-target="types" data-filter-value="false">清空</button></div><div id="types" class="types"></div></div></div>
       <div class="filter-row"><span class="section-label">星级</span><div class="filter-options"><div class="filter-actions"><button type="button" data-filter-target="rarities" data-filter-value="true">全选</button><button type="button" data-filter-target="rarities" data-filter-value="false">清空</button></div><div id="rarities" class="types"></div></div></div>
       <div class="filter-row"><span class="section-label">职业</span><div class="filter-options"><div class="filter-actions"><button type="button" data-filter-target="professions" data-filter-value="true">全选</button><button type="button" data-filter-target="professions" data-filter-value="false">清空</button></div><div id="professions" class="types"></div></div></div>
+      <div class="filter-row"><span class="section-label">是否拥有</span><div class="filter-options"><div id="ownership" class="types"><label><input type="radio" name="ownership" value="all" checked> 不限</label><label><input type="radio" name="ownership" value="owned" disabled> 已拥有</label><label><input type="radio" name="ownership" value="unowned" disabled> 未拥有</label></div><button id="pickOwnerFile" class="plain-button" type="button">选择文件</button><input id="ownerFile" type="file" accept=".json,application/json" hidden><button id="clearOwners" class="plain-button" type="button" hidden>清除</button><span id="ownerStatus" class="owner-status"></span></div></div>
     </div>
     <div id="summary"></div>
     <div class="explanation">
       <p>* 数值越大，通常意味着作业越新。</p>
       <p>* 只看单核：将3星干员视为辅助位，作业中仅有一名3星及以上干员。</p>
       <p>* 最佳组合仅统计3星及以上干员。</p>
+      <p>* 「已拥有/未拥有」需先上传 MAA 导出的干员数据，文件只在浏览器本地解析，不会上传到任何服务器。</p>
     </div>
   </section>
   <section class="panel"><div class="chart-head"><span></span><span id="rankingNote" class="chart-note"></span></div><div class="table-head"><span class="operator-label">干员</span><span></span><span id="countLabel" class="count-label">出现次数</span></div><div id="chart"></div><div class="load-more-wrap"><button id="loadAll" class="load-more" type="button"></button></div></section>
@@ -212,6 +220,14 @@ const loadAll = document.getElementById('loadAll');
 const rankingNote = document.getElementById('rankingNote');
 const countLabel = document.getElementById('countLabel');
 let showAll = false;
+const ownershipBox = document.getElementById('ownership');
+const ownerFile = document.getElementById('ownerFile');
+const ownerStatus = document.getElementById('ownerStatus');
+const clearOwners = document.getElementById('clearOwners');
+const pickOwnerFile = document.getElementById('pickOwnerFile');
+const OWNER_STORAGE_KEY = 'prts-mvp-owners-v1';
+let ownedNames = null;
+let ownedCount = 0;
 const rangeButtons = {{ all: document.querySelector('[data-range="all"]'), new: document.querySelector('[data-range="new"]'), latest: document.querySelector('[data-range="latest"]') }};
 rangeButtons.all.textContent = `全部(0-${{maxDataId}})`;
 rangeButtons.new.textContent = `较新(${{Math.floor(maxDataId / 2)}}-${{maxDataId}})`;
@@ -244,7 +260,7 @@ function setRange(minimum, preset) {{
 function checkedValues(box) {{ return new Set([...box.querySelectorAll('input:checked')].map(input => input.value)); }}
 function matchesOperator(name, selectedRarities, selectedProfessions) {{
   const metadata = operatorMetadata[name];
-  return Boolean(metadata && selectedRarities.has(String(metadata[1])) && selectedProfessions.has(metadata[0]));
+  return Boolean(metadata && selectedRarities.has(String(metadata[1])) && selectedProfessions.has(metadata[0]) && matchesOwnership(name));
 }}
 function update() {{
   let min = Number.parseInt(minInput.value, 10); let max = Number.parseInt(maxInput.value, 10);
@@ -276,7 +292,7 @@ function update() {{
   }});
   const comboCounts = new Map();
   if (bestCombo.checked) jobs.forEach(names => {{
-    const eligible = [...names].filter(name => operatorMetadata[name] && operatorMetadata[name][1] >= 3);
+    const eligible = [...names].filter(name => operatorMetadata[name] && operatorMetadata[name][1] >= 3 && matchesOwnership(name));
     for (const name of eligible) for (const partner of eligible) {{
       if (name < partner) {{ const key = name * operatorNames.length + partner; comboCounts.set(key, (comboCounts.get(key) || 0) + 1); }}
     }}
@@ -331,6 +347,93 @@ document.querySelector('[data-range="latest"]').addEventListener('click', () => 
 loadAll.addEventListener('click', () => {{ showAll = true; update(); }});
 minInput.addEventListener('input', () => {{ showAll = false; document.querySelectorAll('.range-preset').forEach(button => button.classList.remove('is-active')); update(); }});
 maxInput.addEventListener('input', () => {{ showAll = false; document.querySelectorAll('.range-preset').forEach(button => button.classList.remove('is-active')); update(); }});
+function addOwnerAliases(names) {{
+  if (names.has('阿米娅')) {{ names.add('阿米娅(医疗)'); names.add('阿米娅(近卫)'); }}
+}}
+function syncOwnerUI() {{
+  const disabled = !ownedNames;
+  ownershipBox.querySelectorAll('input').forEach(input => {{ input.disabled = disabled; }});
+  if (disabled) ownershipBox.querySelector('input[value="all"]').checked = true;
+  clearOwners.hidden = disabled;
+  ownerStatus.classList.remove('is-error');
+  ownerStatus.textContent = disabled ? '未上传干员数据，所有权筛选不可用' : `已拥有 ${{ownedCount}} 位干员`;
+}}
+function currentOwnership() {{
+  const checked = ownershipBox.querySelector('input:checked');
+  return checked ? checked.value : 'all';
+}}
+function matchesOwnership(operatorId) {{
+  if (!ownedNames) return true;
+  const mode = currentOwnership();
+  const name = operatorNames[operatorId];
+  if (mode === 'owned') return ownedNames.has(name);
+  if (mode === 'unowned') return !ownedNames.has(name);
+  return true;
+}}
+function applyOwnerNames(names) {{
+  if (!names) {{
+    ownedNames = null;
+    ownedCount = 0;
+    try {{ localStorage.removeItem(OWNER_STORAGE_KEY); }} catch (error) {{ /* 隐私模式下忽略存储异常 */ }}
+    ownerFile.value = '';
+    syncOwnerUI();
+    showAll = false;
+    update();
+    return;
+  }}
+  const unique = [...new Set(names)];
+  ownedNames = new Set(unique);
+  ownedCount = unique.length;
+  addOwnerAliases(ownedNames);
+  try {{ localStorage.setItem(OWNER_STORAGE_KEY, JSON.stringify({{ v: 1, names: unique }})); }} catch (error) {{ /* 隐私模式下忽略存储异常 */ }}
+  syncOwnerUI();
+  showAll = false;
+  update();
+}}
+function handleOwnerFile(file) {{
+  const reader = new FileReader();
+  reader.onerror = () => {{
+    ownerStatus.textContent = '读取文件失败，请重试';
+    ownerStatus.classList.add('is-error');
+  }};
+  reader.onload = () => {{
+    try {{
+      const data = JSON.parse(String(reader.result).trim());
+      if (!Array.isArray(data)) throw new Error('顶层不是数组，可能不是 MAA 导出的干员数据');
+      if (!data.some(item => item && typeof item.own === 'boolean')) throw new Error('没有找到 own 字段，可能不是 MAA 导出的干员数据');
+      const names = [];
+      for (const item of data) {{
+        if (!item || typeof item !== 'object' || typeof item.name !== 'string' || !item.name.trim()) throw new Error('存在缺少 name 的条目');
+        if (item.own === true) names.push(item.name.trim());
+      }}
+      applyOwnerNames(names);
+    }} catch (error) {{
+      ownerStatus.textContent = '读取失败：' + error.message;
+      ownerStatus.classList.add('is-error');
+    }}
+  }};
+  reader.readAsText(file);
+}}
+ownershipBox.addEventListener('change', () => {{ showAll = false; update(); }});
+pickOwnerFile.addEventListener('click', () => ownerFile.click());
+ownerFile.addEventListener('change', () => {{
+  const file = ownerFile.files && ownerFile.files[0];
+  if (file) handleOwnerFile(file);
+}});
+clearOwners.addEventListener('click', () => {{ applyOwnerNames(null); }});
+try {{
+  const savedRaw = localStorage.getItem(OWNER_STORAGE_KEY);
+  const saved = savedRaw ? JSON.parse(savedRaw) : null;
+  if (saved && saved.v === 1 && Array.isArray(saved.names)) {{
+    const names = saved.names.filter(name => typeof name === 'string' && name.trim());
+    if (names.length) {{
+      ownedNames = new Set(names);
+      ownedCount = names.length;
+      addOwnerAliases(ownedNames);
+    }}
+  }}
+}} catch (error) {{ /* 本地数据损坏则忽略 */ }}
+syncOwnerUI();
 setRange(0, 'all');
 </script>
 </body>
