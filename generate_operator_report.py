@@ -150,8 +150,10 @@ def write_html_report(
   .bar-row {{ display: grid; grid-template-columns: minmax(110px, 190px) 1fr 78px; gap: 12px; align-items: center; min-height: 36px; margin: 0; border-bottom: 1px solid #edf0f3; }}
   .bar-row:hover {{ background: #f7fafc; }}
   .name {{ color: #35404c; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }}
-  .name a {{ color: inherit; text-decoration: none; }}
+  .name a {{ display: inline-block; padding: 3px 5px; color: inherit; text-decoration: none; }}
   .name a:hover {{ color: #176ea8; text-decoration: underline; text-underline-offset: 2px; }}
+  .name a.is-owned {{ background: #2385c5; color: #fff; }}
+  .name a.is-owned:hover {{ background: #176ea8; color: #fff; }}
   .track {{ height: 12px; background: #edf1f5; border: 0; overflow: hidden; }}
   .bar {{ height: 100%; background: #2385c5; min-width: 2px; }}
   .value {{ font-variant-numeric: tabular-nums; color: #3f4c5a; font-weight: 700; }}
@@ -326,6 +328,7 @@ function update() {{
       const link = document.createElement('a');
       link.href = 'https://prts.wiki/w/' + encodeURIComponent(operatorName);
       link.textContent = operatorName;
+      if (ownedNames && ownedNames.has(operatorName)) link.classList.add('is-owned');
       link.target = '_blank'; link.rel = 'noopener noreferrer';
       n.append(link);
     }};
